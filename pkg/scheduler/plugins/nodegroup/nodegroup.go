@@ -167,6 +167,8 @@ func calculateArguments(ssn *framework.Session, args framework.Arguments) queueG
 }
 
 func (np *nodeGroupPlugin) OnSessionOpen(ssn *framework.Session) {
+	predicateStatus := make([]*api.Status, 0)
+	npStatus := &api.Status{}
 	queueGroupAffinity := calculateArguments(ssn, np.pluginArguments)
 	klog.V(4).Infof("queueGroupAffinity queueGroupAntiAffinityRequired <%v> queueGroupAntiAffinityPreferred <%v> queueGroupAffinityRequired <%v> queueGroupAffinityPreferred <%v> groupLabelName <%v>",
 		queueGroupAffinity.queueGroupAntiAffinityRequired, queueGroupAffinity.queueGroupAntiAffinityPreferred,
@@ -180,14 +182,20 @@ func (np *nodeGroupPlugin) OnSessionOpen(ssn *framework.Session) {
 	}
 	ssn.AddNodeOrderFn(np.Name(), nodeOrderFn)
 
-	predicateFn := func(task *api.TaskInfo, node *api.NodeInfo) error {
+	predicateFn := func(task *api.TaskInfo, node *api.NodeInfo) ([]*api.Status, error) {
 		group := node.Node.Labels[NodeGroupNameKey]
 		queue := task.Pod.Labels[batch.QueueNameKey]
 		if err := queueGroupAffinity.predicate(queue, group); err != nil {
-			return fmt.Errorf("<%s> predicates Task <%s/%s> on Node <%s> of nodegroup <%v> failed <%v>", np.Name(), task.Namespace, task.Name, node.Name, group, err)
+			npStatus.code = api.Error
+			npStatus.Reason = fmt.Errorf("<%s> predicates Task <%s/%s> on Node <%s> of nodegroup <%v> failed <%v>", np.Name(), task.Namespace, task.Name, node.Name, group, err)
+			predicateStatus = append(predicateStatus, npStatus)
+			return predicateStatus, fmt.Errorf("<%s> predicates Task <%s/%s> on Node <%s> of nodegroup <%v> failed <%v>", np.Name(), task.Namespace, task.Name, node.Name, group, err)
 		}
 		klog.V(4).Infof("task <%s>/<%s> queue %s on node %s of nodegroup %v", task.Namespace, task.Name, queue, node.Name, group)
-		return nil
+
+		npStatus.code = api.Success
+		predicateStatus = append(predicateStatus, npStatus)
+		return predicateStatus, nil
 	}
 
 	ssn.AddPredicateFn(np.Name(), predicateFn)
